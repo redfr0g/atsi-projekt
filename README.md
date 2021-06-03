@@ -4,5 +4,5 @@ Path restoration (REST) method implementation for Floodlight SDN controller.
 ## test.py
 SDN test topology with few alternate links.
 
-## applicatin.py
+## application.py
 Floodlight controller application.
