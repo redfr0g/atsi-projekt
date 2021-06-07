@@ -17,9 +17,10 @@ def topology():
     s6 = net.addSwitch('s6', protocols = 'OpenFlow13', mac = '00:00:00:00:00:06')
     s7 = net.addSwitch('s7', protocols = 'OpenFlow13', mac = '00:00:00:00:00:07')
 
-    c1 = net.addController('c1',controller = RemoteController, ip = '192.168.174.129', port = 6653)
+    c1 = net.addController('c1',controller = RemoteController, ip = '127.0.0.1', port = 6653)
     h1 = net.addHost('h1')
     h2 = net.addHost('h2')
+
     print("*** Twozenie polaczen")
     net.addLink(s1,s2)
     net.addLink(s1,s3)
