@@ -7,13 +7,76 @@ from requests.exceptions import HTTPError
 import time
 import json
 
+# change IP address for your floodlight configuration
+controller_url = "http://127.0.0.1:8080"
 
+try:
+    # get all switches in the network
+    response = requests.get(controller_url + "/wm/core/controller/switches/json")
+    response.raise_for_status()
+
+    json_response = response.json()
+    # count switches to iterate the API later
+    switch_count = len(json_response)
+
+    links_response = requests.get(controller_url + "/wm/topology/links/json")
+    links_response.raise_for_status()
+
+    known_links = links_response.json()
+    topology_graph = {} # element: <switch_id>: {<dst_switch>: (<src_port>, <dst_port>, <weight>), <dst_switch>: (...)}
+    for switch_id in range(1,switch_count+1):
+        topology_graph["S{}".format(switch_id)] = {}
+    for link in known_links:
+        dst_id = "S{}".format(int(link["dst-switch"][-2:]))
+        dst_port = int(link["dst-port"])
+        src_id = "S{}".format(int(link["src-switch"][-2:]))
+        src_port = int(link["src-port"])
+        topology_graph[dst_id][src_id] = (dst_port, src_port, 1) # weights set to 1 to simplify the program
+        topology_graph[src_id][dst_id] = (src_port, dst_port, 1) 
+
+except HTTPError as http_err:
+    print("HTTP error occurred: {}".format(http_err))
+except Exception as err:
+    print("Other error occurred: {}".format(err))
+
+while True:
+    try:
+        # get ports description for each switch
+        for switch_id in range(1,switch_count+1):
+            response = requests.get(controller_url + "/wm/core/switch/{}/port-desc/json".format(switch_id))
+            response.raise_for_status()
+
+            json_response = response.json()
+            for port in json_response["portDesc"]:
+                # if the port is local do nothing
+                if port["portNumber"] == "local":
+                    continue
+                else:
+                    # 1 - port is DOWN, 0 - port is UP
+                    if port["state"] == "0":
+                        print("Port {} is UP".format(port["name"]))
+                    else:
+                        # handle restoratation method here
+                        print("Port {} is DOWN".format(port["name"]))
+			for link in known_links:
+			    if int(link["src-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["src-port"]:
+				shortest_path(topology_graph, [link])
+				break
+			    elif int(link["dst-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["dst-port"]:
+				shortest_path(topology_graph, [link])
+				break
+            time.sleep(2)
+
+    except HTTPError as http_err:
+        print("HTTP error occurred: {}".format(http_err))
+    except Exception as err:
+        print("Other error occurred: {}".format(err))
 
 # Path calculations based on initially known topology and down links
 # topology: graph created at the beginning of this script
 # down_links: entire link row from "/wm/topology/links/json" enpoint
 def shortest_path(topology, down_links):
-    working_topology = dict(topology)
+    working_topology = topology
     for link in down_links:
         src_switch = "S{}".format(int(link["src-switch"][-2:]))
         src_port = link["src-port"]
@@ -21,27 +84,16 @@ def shortest_path(topology, down_links):
 	dst_port = link["dst-port"]
 	
 	src_neighbours = working_topology[src_switch]
-	for id, items in src_neighbours.items():
-	    start_port, end_port, weight = items
+	for start_port, end_port, weight in src_neighbours:
 	    if start_port == src_port and end_port == dst_port:
-  	        del working_topology[src_switch][dst_switch]
-	
+		del working_topology[src_switch][dst_switch]
+
 	dst_neighbours = working_topology[dst_switch]
-	for id, items in dst_neighbours.items():
-	    start_port, end_port, weight = items
+	for start_port, end_port, weight in dst_neighbours:
 	    if start_port == src_port and end_port == dst_port:
 		del working_topology[dst_switch][src_switch]
 
-    # calculate shortest path   
-    dijkstra_graph = {}
-    for node, values in working_topology.items():
-	dijkstra_graph[node] = {}
-	for neighbour, items in values.items():
-	    start, end, weight = items 
-	    dijkstra_graph[node][neighbour] = weight
-    path = dijkstra(dijkstra_graph, "S1", "S7")
-    print(path)
-	 
+    print("CHUJEK")
 
 # https://stackoverflow.com/a/37237712
 # Dijkstra
@@ -156,71 +208,3 @@ def dijkstra(weighted_graph, start, end):
                 to_visit.add((new_dist, target))
 
     return backtrack(best_parents, start, end)
-
-
-
-
-# change IP address for your floodlight configuration
-controller_url = "http://127.0.0.1:8080"
-
-try:
-    # get all switches in the network
-    response = requests.get(controller_url + "/wm/core/controller/switches/json")
-    response.raise_for_status()
-
-    json_response = response.json()
-    # count switches to iterate the API later
-    switch_count = len(json_response)
-
-    links_response = requests.get(controller_url + "/wm/topology/links/json")
-    links_response.raise_for_status()
-
-    known_links = links_response.json()
-    topology_graph = {} # element: <switch_id>: {<dst_switch>: (<src_port>, <dst_port>, <weight>), <dst_switch>: (...)}
-    for switch_id in range(1,switch_count+1):
-        topology_graph["S{}".format(switch_id)] = {}
-    for link in known_links:
-        dst_id = "S{}".format(int(link["dst-switch"][-2:]))
-        dst_port = int(link["dst-port"])
-        src_id = "S{}".format(int(link["src-switch"][-2:]))
-        src_port = int(link["src-port"])
-        topology_graph[dst_id][src_id] = (dst_port, src_port, 1) # weights set to 1 to simplify the program
-        topology_graph[src_id][dst_id] = (src_port, dst_port, 1) 
-
-except HTTPError as http_err:
-    print("HTTP error occurred: {}".format(http_err))
-except Exception as err:
-    print("Other error occurred: {}".format(err))
-
-while True:
-    try:
-        # get ports description for each switch
-        for switch_id in range(1,switch_count+1):
-            response = requests.get(controller_url + "/wm/core/switch/{}/port-desc/json".format(switch_id))
-            response.raise_for_status()
-
-            json_response = response.json()
-            for port in json_response["portDesc"]:
-                # if the port is local do nothing
-                if port["portNumber"] == "local":
-                    continue
-                else:
-                    # 1 - port is DOWN, 0 - port is UP
-                    if port["state"] == "0":
-                        print("Port {} is UP".format(port["name"]))
-                    else:
-                        # handle restoratation method here
-                        print("Port {} is DOWN".format(port["name"]))
-			for link in known_links:
-			    if int(link["src-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["src-port"]:
-				shortest_path(topology_graph, [link])
-				break
-			    elif int(link["dst-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["dst-port"]:
-				shortest_path(topology_graph, [link])
-				break
-            time.sleep(2)
-
-    except HTTPError as http_err:
-        print("HTTP error occurred: {}".format(http_err))
-    except Exception as err:
-        print("Other error occurred: {}".format(err))
