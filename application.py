@@ -119,7 +119,9 @@ restored = []
 while True:
 	try:
 		# get ports description for each switch
-		for switch_id in range(1,switch_count+1):
+		switch_id = 1
+		restoring = False
+		while switch_id <= switch_count:
 			response = requests.get(controller_url + "/wm/core/switch/{}/port-desc/json".format(switch_id))
 			response.raise_for_status()
 
@@ -135,9 +137,16 @@ while True:
 					else:
 						# handle restoratation method here
 						print("Port {} is DOWN".format(port["name"]))
+						# if port was NOT previously restored proceed
 						if port['name'] not in restored:
 							for link in known_links:
 								if int(link["src-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["src-port"]:
+									# if not already in restoration set restoring to True
+									if not restoring:
+										restoring = True
+									else:
+										restoring = False
+									# get current network topology
 									graph = update_graph()
 								
 									print("Finding path from {} to {}".format(str(switch_id), str(int(link["dst-switch"][-2:]))))
@@ -145,9 +154,14 @@ while True:
 									print(path)
 									update_flows(path[0])
 									restored.append(port["name"])
-									break
+									switch_id = int(link["dst-switch"][-2:])
+									continue
 
 								elif int(link["dst-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["dst-port"]:
+									if not restoring:
+										restoring = True
+									else:
+										restoring = False
 									graph = update_graph()
 								
 									print("Finding path from {} to {}".format(str(switch_id), str(int(link["src-switch"][-2:]))))
@@ -155,8 +169,11 @@ while True:
 									print(path)
 									update_flows(path[0])
 									restored.append(port["name"])
-									break
-			time.sleep(1)
+									switch_id = int(link["src-switch"][-2:])
+									continue
+			if not restoring:
+				switch_id += 1						
+				time.sleep(1)
 
 	except HTTPError as http_err:
 		print("HTTP error occurred: {}".format(http_err))
