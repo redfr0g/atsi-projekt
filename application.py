@@ -4,6 +4,7 @@ import requests
 from requests.exceptions import HTTPError
 import time
 import json
+import traceback
 from dijkstar import Graph, find_path # pip3 install dijkstar; pip3 install --ignore-installed six
 
 
@@ -28,7 +29,70 @@ def update_graph():
 
 	return graph
 
+def get_src_port(src, dst):
+        src = '00:00:00:00:00:00:00:{:0>2}'.format(src)
+        dst = '00:00:00:00:00:00:00:{:0>2}'.format(dst)
+        for link in known_links:
+                if link["src-switch"] == src and link["dst-switch"] == dst:
+                        return link['src-port']
+                if link["src-switch"] == dst and link["dst-switch"] == src:
+                        return link['dst-port']
 
+def modify_flow(switch_id, name, in_port, actions, priority):
+        new_flow = {
+                    'switch':"00:00:00:00:00:00:00:{:0>2}".format(switch_id),
+                    "name": name,
+                    "cookie":"0",
+                    "priority": priority,
+                    "in_port": in_port,
+                    "active":"true",
+                    "actions": actions
+                    }
+
+        #r = requests.get(controller_url + '/wm/staticflowpusher/clear/00:00:00:00:00:00:00:{:0>2}/json'.format(switch_id))
+        #r.raise_for_status()
+
+        r = requests.post(controller_url + "/wm/staticflowpusher/json", data=json.dumps(new_flow))
+        print("Flow added with status code {} to switch {} in_port {} action {}".format(r.status_code, switch_id, in_port, actions))
+        r.raise_for_status()
+
+def update_flows(path):
+        for i, node in enumerate(path):
+                if i == 0 or i == len(path) - 1:
+
+                        r = requests.get(controller_url + "/wm/staticflowpusher/list/{}/json".format(node))
+                        r.raise_for_status()
+                        
+                        flows = r.json()
+
+                        if i == 0:
+                                old_out_port = get_src_port(node, path[-1])
+                                for flow in flows[node]:
+                                        flow = list(flow.values())[0]
+                                        if flow['instructions']['instruction_apply_actions']['actions'] == 'output={}'.format(old_out_port):
+                                                in_port = flow['match']['in_port']
+                                                out_port = get_src_port(node, path[i+1])
+                                                modify_flow(node, 'rest_flow_mod_{}_start'.format(node), in_port, "output={}".format(out_port), "1")
+                        
+                        elif i == len(path) - 1:
+                                old_in_port = get_src_port(node, path[0])
+                                print("Old in port " + str(old_in_port))
+                                for flow in flows[node]:
+                                        flow = list(flow.values())[0]
+                                        if flow['match']['in_port'] == str(old_in_port):
+                                                actions = flow['instructions']['instruction_apply_actions']['actions'] 
+                                                in_port = get_src_port(node, path[i-1])
+                                                modify_flow(node, 'rest_flow_mod_{}_end'.format(node), in_port , actions, "1")
+
+                else:
+                        in_port = get_src_port(node, path[i-1])
+                        out_port = get_src_port(node, path[i+1])
+                        modify_flow(node, 'rest_flow_mod_{}_{}'.format(node, path[i+1]), in_port, "output={}".format(out_port), "1")
+                         
+                        
+
+                                
+                
 # change ip address for your floodlight configuration
 controller_url = "http://127.0.0.1:8080"
 
@@ -51,10 +115,13 @@ except HTTPError as http_err:
 except Exception as err:
 	print("Other error occurred: {}".format(err))
 
+restored = []
 while True:
 	try:
 		# get ports description for each switch
-		for switch_id in range(1,switch_count+1):
+		switch_id = 1
+		restoring = False
+		while switch_id <= switch_count:
 			response = requests.get(controller_url + "/wm/core/switch/{}/port-desc/json".format(switch_id))
 			response.raise_for_status()
 
@@ -70,26 +137,45 @@ while True:
 					else:
 						# handle restoratation method here
 						print("Port {} is DOWN".format(port["name"]))
-						
-						for link in known_links:
-							if int(link["src-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["src-port"]:
-								graph = update_graph()
+						# if port was NOT previously restored proceed
+						if port['name'] not in restored:
+							for link in known_links:
+								if int(link["src-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["src-port"]:
+									# if not already in restoration set restoring to True
+									if not restoring:
+										restoring = True
+									else:
+										restoring = False
+									# get current network topology
+									graph = update_graph()
 								
-								print("Finding path from {} to {}".format(str(switch_id), str(int(link["dst-switch"][-2:]))))
-								path = find_path(graph,str(switch_id), str(int(link["dst-switch"][-2:])))
-								print(path)
-								break
+									print("Finding path from {} to {}".format(str(switch_id), str(int(link["dst-switch"][-2:]))))
+									path = find_path(graph,str(switch_id), str(int(link["dst-switch"][-2:])))
+									print(path)
+									update_flows(path[0])
+									restored.append(port["name"])
+									switch_id = int(link["dst-switch"][-2:])
+									continue
 
-							elif int(link["dst-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["dst-port"]:
-								graph = update_graph()
+								elif int(link["dst-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["dst-port"]:
+									if not restoring:
+										restoring = True
+									else:
+										restoring = False
+									graph = update_graph()
 								
-								print("Finding path from {} to {}".format(str(switch_id), str(int(link["src-switch"][-2:]))))
-								path = find_path(graph,str(switch_id), str(int(link["src-switch"][-2:])))
-								print(path)
-								break
-			time.sleep(1)
+									print("Finding path from {} to {}".format(str(switch_id), str(int(link["src-switch"][-2:]))))
+									path = find_path(graph,str(switch_id), str(int(link["src-switch"][-2:])))
+									print(path)
+									update_flows(path[0])
+									restored.append(port["name"])
+									switch_id = int(link["src-switch"][-2:])
+									continue
+			if not restoring:
+				switch_id += 1						
+				time.sleep(1)
 
 	except HTTPError as http_err:
 		print("HTTP error occurred: {}".format(http_err))
 	except Exception as err:
-		print("Other error occurred: {}".format(err))
+		print(traceback.format_exc())
