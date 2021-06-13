@@ -49,9 +49,6 @@ def modify_flow(switch_id, name, in_port, actions, priority):
                     "actions": actions
                     }
 
-        #r = requests.get(controller_url + '/wm/staticflowpusher/clear/00:00:00:00:00:00:00:{:0>2}/json'.format(switch_id))
-        #r.raise_for_status()
-
         r = requests.post(controller_url + "/wm/staticflowpusher/json", data=json.dumps(new_flow))
         print("Flow added with status code {} to switch {} in_port {} action {}".format(r.status_code, switch_id, in_port, actions))
         r.raise_for_status()
@@ -88,11 +85,7 @@ def update_flows(path):
                         in_port = get_src_port(node, path[i-1])
                         out_port = get_src_port(node, path[i+1])
                         modify_flow(node, 'rest_flow_mod_{}_{}'.format(node, path[i+1]), in_port, "output={}".format(out_port), "1")
-                         
-                        
-
-                                
-                
+                                         
 # change ip address for your floodlight configuration
 controller_url = "http://127.0.0.1:8080"
 
@@ -140,6 +133,7 @@ while True:
 						# if port was NOT previously restored proceed
 						if port['name'] not in restored:
 							for link in known_links:
+								# if current switch is source switch in current link -> restore
 								if int(link["src-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["src-port"]:
 									# if not already in restoration set restoring to True
 									if not restoring:
@@ -157,6 +151,7 @@ while True:
 									switch_id = int(link["dst-switch"][-2:])
 									continue
 
+								# if current switch is destination switch in current link -> restore
 								elif int(link["dst-switch"][-2:]) == switch_id and int(port["portNumber"]) == link["dst-port"]:
 									if not restoring:
 										restoring = True
@@ -171,6 +166,7 @@ while True:
 									restored.append(port["name"])
 									switch_id = int(link["src-switch"][-2:])
 									continue
+			# if not in rest method sleep to not overflow API
 			if not restoring:
 				switch_id += 1						
 				time.sleep(1)
